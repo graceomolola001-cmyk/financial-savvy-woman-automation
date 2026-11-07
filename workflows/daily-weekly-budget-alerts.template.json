@@ -1,0 +1,220 @@
+{
+  "name": "Financial Savvy Woman | Daily, Weekly & Budget Alerts",
+  "nodes": [
+    {
+      "name": "Daily 9 PM Lagos",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 21,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Read Financial Transactions",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        224,
+        0
+      ],
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "REPLACE_WITH_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Transactions"
+        },
+        "options": {
+          "dataLocationOnSheet": {
+            "values": {
+              "rangeDefinition": "detectAutomatically"
+            }
+          }
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "name": "Read Category Budgets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        448,
+        0
+      ],
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "REPLACE_WITH_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Categories & Rules"
+        },
+        "options": {
+          "dataLocationOnSheet": {
+            "values": {
+              "rangeDefinition": "detectAutomatically"
+            }
+          }
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "name": "Read Alert Settings",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        672,
+        0
+      ],
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "REPLACE_WITH_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Alert Settings"
+        },
+        "options": {
+          "dataLocationOnSheet": {
+            "values": {
+              "rangeDefinition": "specifyRangeA1",
+              "range": "A3:C50"
+            }
+          }
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "name": "Compose Daily Weekly and Budget Alerts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst rows=$('Read Financial Transactions').all().map(x=>x.json||{}).filter(x=>x.Date&&x.Event_ID&&x.Status!=='Ignored'&&x.Status!=='Duplicate');\nconst budgets=$('Read Category Budgets').all().map(x=>x.json||{});\nconst settings=Object.fromEntries($input.all().map(x=>x.json||{}).filter(x=>x.Setting).map(x=>[String(x.Setting),String(x.Value??'')]));\nconst enabled=x=>/^(true|yes|1|on)$/i.test(String(x||'').trim());\nconst email=String(settings['Report email']||'').trim();\nif(!enabled(settings['Daily email enabled'])||!/^[-.\\w+]+@[-.\\w]+\\.[a-z]{2,}$/i.test(email))return [];\nconst parts=new Intl.DateTimeFormat('en-GB',{timeZone:'Africa/Lagos',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());\nconst datePart=k=>parts.find(x=>x.type===k)?.value||'';\nconst today=datePart('year')+'-'+datePart('month')+'-'+datePart('day');\nconst asDate=new Date(today+'T12:00:00Z'),day=asDate.getUTCDay();\nconst weekStart=new Date(asDate);weekStart.setUTCDate(asDate.getUTCDate()-((day+6)%7));\nconst ymd=x=>x.toISOString().slice(0,10),mStart=today.slice(0,7);\nconst amount=x=>{const n=Number(String(x.Amount_NGN||'').replace(/,/g,''));return Number.isFinite(n)?n:0;};\nconst total=(a,fn)=>a.filter(fn).reduce((acc,x)=>acc+amount(x),0);\nconst money=n=>'₦'+Number(n||0).toLocaleString('en-NG',{minimumFractionDigits:2,maximumFractionDigits:2});\nconst metrics=a=>({\n count:a.length,\n credit:total(a,x=>x.Direction==='Credit'),\n debit:total(a,x=>x.Direction==='Debit'),\n expense:total(a,x=>x.Direction==='Debit'&&x.Type==='Expense'),\n unknown:total(a,x=>x.Direction==='Debit'&&x.Type==='Unclassified Debit'),\n transfers:total(a,x=>x.Direction==='Debit'&&x.Type==='Internal Transfer'),\n possible:total(a,x=>x.Direction==='Debit'&&x.Type==='Possible Transfer')\n});\nconst line=(label,arr)=>{const m=metrics(arr);return label+'\\nCredits received: '+money(m.credit)+'\\nDebits recorded: '+money(m.debit)+'\\nNet account movement: '+money(m.credit-m.debit)+'\\nCategorised expenses: '+money(m.expense)+'\\nUnclassified debits: '+money(m.unknown)+'\\nOwn-account transfers out: '+money(m.transfers)+'\\nPossible transfers out: '+money(m.possible)+'\\nTransactions recorded: '+m.count;};\nconst monthRows=rows.filter(x=>String(x.Date).startsWith(mStart)),todayRows=rows.filter(x=>String(x.Date)===today);\nconst warnings=[],thresholdRaw=Number(settings['Warn at percentage of budget']),threshold=Number.isFinite(thresholdRaw)&&thresholdRaw>=1&&thresholdRaw<=100?thresholdRaw:80;\nconst monthExpense=metrics(monthRows).expense,monthlyLimit=Number(String(settings['Overall monthly spending limit (₦)']||'').replace(/,/g,''));\nif(monthlyLimit>0&&monthExpense/monthlyLimit*100>=threshold)warnings.push('Overall classified spending '+money(monthExpense)+' / '+money(monthlyLimit)+' ('+Math.round(monthExpense/monthlyLimit*100)+'%)');\nfor(const b of budgets){\n const category=String(b['Expense category']||'').trim();\n const budget=Number(String(b['Monthly budget (₦)']||'').replace(/,/g,''));\n if(!category||category==='Unknown'||!(budget>0))continue;\n const spent=total(monthRows,x=>x.Direction==='Debit'&&x.Type==='Expense'&&x.Category===category);\n if(spent/budget*100>=threshold)warnings.push(category+': '+money(spent)+' / '+money(budget)+' ('+Math.round(spent/budget*100)+'%)');\n}\nlet message='FINANCIAL SAVVY WOMAN | DAILY MONEY REPORT\\n'+today+'\\n\\n'+line('TODAY',todayRows);\nconst isSunday=day===0&&enabled(settings['Sunday weekly recap enabled']);\nif(isSunday){\n const weekRows=rows.filter(x=>String(x.Date)>=ymd(weekStart)&&String(x.Date)<=today);\n message+='\\n\\n'+line('WEEKLY RECAP ('+ymd(weekStart)+' to '+today+')',weekRows);\n}\nif(warnings.length)message+='\\n\\nBUDGET WARNINGS (threshold '+threshold+'%)\\n'+warnings.map(x=>'• '+x).join('\\n');\nelse message+='\\n\\nBudget alerts: No configured spending threshold reached. Add budgets in Categories & Rules and Alert Settings.';\nmessage+='\\n\\nIMPORTANT: Bank debits can include transfers, fees, and uncategorised movements. Only purpose-classified debits count as spending here. Missing bank alerts can make the totals incomplete.\\n\\nGenerated automatically from Financial Savvy Woman.';\nreturn [{json:{sendTo:email,subject:'Financial Savvy Woman | '+(isSunday?'Daily + Weekly':'Daily')+' report | '+today+(warnings.length?' | Budget warning':''),message,day:today,warningCount:warnings.length}}];\n"
+      }
+    },
+    {
+      "name": "Email Money Summary",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1120,
+        0
+      ],
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $json.sendTo }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "text",
+        "message": "={{ $json.message }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "disabled": false
+    }
+  ],
+  "connections": {
+    "Daily 9 PM Lagos": {
+      "main": [
+        [
+          {
+            "node": "Read Financial Transactions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Financial Transactions": {
+      "main": [
+        [
+          {
+            "node": "Read Category Budgets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Category Budgets": {
+      "main": [
+        [
+          {
+            "node": "Read Alert Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Alert Settings": {
+      "main": [
+        [
+          {
+            "node": "Compose Daily Weekly and Budget Alerts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compose Daily Weekly and Budget Alerts": {
+      "main": [
+        [
+          {
+            "node": "Email Money Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "Africa/Lagos",
+    "executionOrder": "v1"
+  }
+}
