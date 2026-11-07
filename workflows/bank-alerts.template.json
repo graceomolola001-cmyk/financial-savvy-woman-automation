@@ -1,0 +1,665 @@
+{
+  "name": "Financial Savvy Woman | Bank Alerts to Spending Ledger",
+  "nodes": [
+    {
+      "name": "Android Banking Alerts",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        224,
+        208
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "REPLACE_WITH_WEBHOOK_PATH",
+        "authentication": "headerAuth",
+        "options": {
+          "noResponseBody": true
+        }
+      },
+      "disabled": true
+    },
+    {
+      "name": "Parse Redact and Categorize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        432,
+        384
+      ],
+      "parameters": {
+        "jsCode": "\nconst out=[];\nconst clean=v=>String(v||'').replace(/https?:\\/\\/\\S+/gi,' ').replace(/<[^>]+>/g,' ').replace(/&nbsp;|\\u00a0/gi,' ').replace(/\\s+/g,' ').trim();\nconst bankMap={opay:'OPay',uba:'UBA',wema:'Wema',alat:'Wema',palmpay:'PalmPay',kuda:'Kuda',moniepoint:'Moniepoint',gtbank:'GTBank',gtb:'GTBank',access:'Access',zenith:'Zenith',firstbank:'FirstBank'};\nconst namedBank=s=>{const t=String(s||'').toLowerCase();const k=Object.keys(bankMap).find(k=>t.includes(k));return k?bankMap[k]:'';};\nconst sender=p=>{const f=p.from||p.sender||'';if(typeof f==='string')return (f.match(/[a-z0-9._%+-]+@[a-z0-9.-]+/i)||[''])[0].toLowerCase();if(Array.isArray(f?.value))return String(f.value[0]?.address||'').toLowerCase();return String(f?.address||f?.text||'').toLowerCase();};\nconst senderBank=email=>{const d=(email.split('@')[1]||'').toLowerCase();const host=h=>d===h||d.endsWith('.'+h);return host('ubagroup.com')?'UBA':(host('opay-nigeria.com')||host('opay.ng'))?'OPay':(host('wemabank.com')||host('alat.ng')||host('alatbywema.com'))?'Wema':'';};\nconst hash=s=>{let v=2166136261;for(let i=0;i<s.length;i++){v^=s.charCodeAt(i);v=Math.imul(v,16777619);}return (v>>>0).toString(16);};\nconst amountOf=t=>{const ps=[/\\b(?:transaction|transfer|payment|withdrawal|deposit)\\s+(?:amount|value)\\s*[:\\-]?\\s*(?:NGN|₦|N\\s)?\\s*([\\d,]+(?:\\.\\d{1,2})?)/i,/\\b(?:your\\s+transfer\\s+of|transferred|sent|received|paid|credited\\s+with|debited\\s+with|amount\\s+of)\\s*(?:NGN|₦|N\\s)\\s*([\\d,]+(?:\\.\\d{1,2})?)/i,/\\b(?:amount|sum)\\s*[:\\-]\\s*(?:NGN|₦|N\\s)?\\s*([\\d,]+(?:\\.\\d{1,2})?)/i,/(?:NGN|₦)\\s*([\\d,]+(?:\\.\\d{1,2})?)/i];for(const re of ps){const m=t.match(re);if(m){const x=Number(m[1].replace(/,/g,''));if(Number.isFinite(x)&&x>0&&x<1e12)return Math.round(x*100)/100;}}return 0;};\nconst direction=(s,b)=>{\n let m=b.match(/\\btype\\s*[:\\-]?\\s*(CREDIT|DEBIT)\\s*(?:ALERT|TRANSACTION)?\\b/i);\n if(!m)m=s.match(/\\b(CREDIT|DEBIT)\\s*(?:TRANSACTION\\s*)?(?:NOTIFICATION|ALERT)\\b/i);\n if(m)return m[1].toLowerCase()==='credit'?'Credit':'Debit';\n if(/\\b(?:payment received|transfer received|incoming transfer|credit alert|credited)\\b/i.test(s))return 'Credit';\n if(/\\b(?:transfer successful|payment successful|transfer sent|debit alert|debited)\\b/i.test(s))return 'Debit';\n const c=/\\b(?:credited|credit alert|payment received|transfer received|received from|you (?:have )?received|incoming transfer|deposit successful|cash in)\\b/i.test(b);\n const d=/\\b(?:debited|debit alert|payment successful|paid to|sent to|transfer to|your transfer of|transfer successful|withdrawal successful|you (?:have )?sent)\\b/i.test(b);\n if(c&&d)return '';\n if(c)return 'Credit';\n if(d)return 'Debit';\n if(/\\bcredit\\b/i.test(s)&&/\\btransaction\\b/i.test(s))return 'Credit';\n if(/\\bdebit\\b/i.test(s)&&/\\btransaction\\b/i.test(s))return 'Debit';\n return '';\n};\nconst timestamp=(b,f)=>{const m=b.match(/\\b(?:date\\s*(?:and|&)\\s*time|transaction\\s*(?:date|time))\\s*[:\\-]?\\s*(\\d{1,2})[-\\/](\\w{3}|\\d{1,2})[-\\/](\\d{4})\\s+(\\d{1,2}):(\\d{2})/i);if(!m)return f;const names=['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];const mo=/^\\d+$/.test(m[2])?Number(m[2]):names.indexOf(m[2].toLowerCase())+1;if(mo<1||mo>12||Number(m[1])>31||Number(m[4])>23)return f;const d=new Date(Date.UTC(Number(m[3]),mo-1,Number(m[1]),Number(m[4])-1,Number(m[5])));return Number.isNaN(d.getTime())?f:d;};\nconst parts=d=>{const z=new Intl.DateTimeFormat('en-GB',{timeZone:'Africa/Lagos',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(d);const v=k=>(z.find(x=>x.type===k)||{}).value||'';return{day:v('year')+'-'+v('month')+'-'+v('day'),time:v('hour')+':'+v('minute')};};\nfor(const item of $input.all()){\n const j=item.json||{},p=(j.body&&typeof j.body==='object'&&!Array.isArray(j.body))?j.body:j;\n const subject=clean(p.subject||p.Subject||p.title||p.headers?.subject||'').slice(0,180);\n const body=clean(p.text||p.notificationText||p.message||p.snippet||(typeof p.body==='string'?p.body:'')||p.html||'').slice(0,20000);\n if(!body&&!subject)continue;\n // Reject promotional emails before attempting to extract any amount.\n if(/\\b(?:security update|newsletter|promotion|promotional|special offer|tips and tricks|product update|new feature|fraud awareness)\\b/i.test(subject)\n    && !/\\b(?:debit|credit|transfer successful|payment received|has been debited|has been credited)\\b/i.test(subject)) continue;\n const from=sender(p);let bank=senderBank(from);\n if(!bank&&!from)bank=namedBank(p.bank||j.bank);\n if(!bank&&/wema|alat/i.test(from)&&/wema|alat/i.test(subject+' '+body.slice(0,700)))bank='Wema';\n if(!bank&&/opay/i.test(from)&&/opay/i.test(subject+' '+body.slice(0,700)))bank='OPay';\n if(!bank&&/uba/i.test(from)&&/uba/i.test(subject+' '+body.slice(0,700)))bank='UBA';\n if(!bank||/\\b(otp|one.time password|verification code|sign.in code|login code|pin reset)\\b/i.test(subject))continue;\n const amount=amountOf(body+' '+subject),dir=direction(subject,body);\n const structured=/\\btransaction\\s+amount\\b/i.test(body)&&/\\b(?:credit|debit)\\s+alert\\b/i.test(body);\n const alertTitle=/\\b(?:transfer successful|payment successful|transaction notification|credit alert|debit alert|transaction alert|payment received|transfer received|transaction receipt)\\b/i.test(subject);\n const strongBody=/\\b(?:your transfer of|transaction amount|transfer amount|debited with|credited with)\\b/i.test(body)&&/\\b(?:successful|credited|debited|transaction|transfer)\\b/i.test(body);\n if(!amount||!dir||!(structured||alertTitle||strongBody)){\n   const potential=/\\b(?:transfer successful|payment successful|transaction notification|credit alert|debit alert|transaction alert|payment received|transfer received|transaction receipt)\\b/i.test(subject)||/\\b(?:transaction amount|your transfer of|account was credited|account was debited)\\b/i.test(body.slice(0,1500));\n   if(potential){\n     const fd=new Date(p.date||p.receivedAt||j.date||Date.now());\n     const fp=parts(Number.isNaN(fd.getTime())?new Date():fd);\n     const mid=String(p.id||p.messageId||p.eventId||p.notificationId||j.id||'').trim();\n     const issue=(!amount?'Amount missing or unreadable':!dir?'Credit/debit direction unclear':'Unrecognized bank-alert wording');\n     out.push({json:{Received_Date:fp.day,Bank:bank,Subject:subject.slice(0,150),Issue:issue,Email_ID:(mid?'mail-'+bank+'-'+mid:'fallback-'+bank+'-'+hash(subject+body.slice(0,1500))).slice(0,110),Status:'Needs Review',is_valid:false}});\n   }\n   continue;\n }\n let dt=new Date(p.receivedAt||p.date||p.timestamp||j.date||Date.now());if(Number.isNaN(dt.getTime()))dt=new Date();dt=timestamp(body,dt);\n const t=parts(dt);\n const acct=(body.match(/\\b(?:account\\s*(?:number|no\\.?|ending|\\#)|a\\/c\\s*(?:no|number))\\s*[:\\-]?\\s*([0-9*xX.\\-]{4,20})/i)||[])[1]||'';\n const accountHint=acct?bank+' •••'+acct.replace(/[^A-Z0-9]/gi,'').slice(-4).toUpperCase():'';\n const detail=(body.match(/\\b(?:transfer details|beneficiary details|recipient details)\\s*:?(.{0,380})/i)||[])[1]||'';\n const detailBank=(detail.match(/\\bbank\\s*:\\s*([A-Za-z][A-Za-z -]{2,40})/i)||[])[1]||'';\n const beneficiary=(body.match(/\\b(?:beneficiary bank|recipient bank|destination bank)\\s*[:\\-]\\s*([A-Za-z][A-Za-z -]{2,45})/i)||[])[1]||'';\n const narration=(body.match(/\\b(?:transaction narration|narration)\\s*[:\\-]?\\s*(.{0,120})/i)||[])[1]||'';\n let cp=namedBank(detailBank)||namedBank(beneficiary);if(!cp&&/\\bALAT\\s+NIP\\s+TRANSFER\\b/i.test(narration))cp='Wema';if(cp===bank)cp='';\n const ref=(body.match(/\\b(?:transaction\\s*(?:ref(?:erence)?|id|remarks)|session\\s*id|reference\\s*(?:no|number)?|receipt\\s*(?:no|id)|transfer\\s*id)\\s*[:#-]?\\s*([A-Z0-9-]{6,40})\\b/i)||[])[1]||'';\n const sourceId=String(p.id||p.messageId||p.eventId||p.notificationId||j.id||'').trim();\n const sig=sourceId?'gmail-'+bank+'-'+sourceId:ref?'ref-'+bank+'-'+dir+'-'+accountHint+'-'+ref.toUpperCase()+'-'+amount.toFixed(2)+'-'+t.day+'-'+t.time:'body-'+bank+'-'+dir+'-'+amount+'-'+t.day+'-'+hash(subject+'|'+body);\n const key=sig.replace(/[^A-Za-z0-9_-]/g,'').slice(0,115);\n const description=(body.match(/\\b(?:transaction description|transfer description|payment description|payment purpose|purpose of payment|narrative|remarks|memo|payment notes?)\\s*[:\\-]\\s*(.{3,150})/i)||[])[1]||'';\n const cleanedPurpose=(narration+' '+description).split(/\\b(?:available balance|closing balance|transaction id|session id|reference number|account number|transaction date)\\s*[:\\-]/i)[0].slice(0,200);\n const purpose=cleanedPurpose.replace(/\\b(?:account|reference|session|transaction|amount|balance|date|time|bank|beneficiary|recipient|successful|transfer|debit|credit|notification|alert|nip|funds)\\b/gi,' ').replace(/\\b\\d{7,16}\\b/g,'[number]').trim();\n const categoryRules=[\n  ['Bank fees',/\\b(?:stamp duty|bank charge|transfer fee|transaction fee|emtl|sms fee|service charge)\\b/i],\n  ['Subscriptions & software',/\\b(?:chatgpt|openai|netflix|spotify|hostinger|canva|subscription|google one)\\b/i],\n  ['Transport',/\\b(?:uber|bolt ride|taxify|bus fare|transport fare|fuel station)\\b/i],\n  ['Food & groceries',/\\b(?:supermarket|grocery|groceries|restaurant|foodstuff)\\b/i],\n  ['Learning & courses',/\\b(?:tuition|training fee|course fee|school fees|exam fee)\\b/i],\n  ['Skincare & personal care',/\\b(?:skincare|salon|cosmetics|hairdresser)\\b/i],\n  ['Clothing',/\\b(?:tailoring|fashion store|clothing store|shoe shop)\\b/i],\n  ['Tithe & giving',/\\b(?:tithe|church offering|donation|charity)\\b/i],\n  ['Housing & utilities',/\\b(?:rent payment|electricity bill|internet subscription|airtime recharge|data bundle)\\b/i],\n  ['Health',/\\b(?:pharmacy|hospital|clinic|medical bill)\\b/i],\n  ['Entertainment',/\\b(?:cinema|movie ticket|concert ticket)\\b/i]\n ];\n // Evaluate the explicit purpose, never the generic email template or bank name.\n const matched=categoryRules.find(([,rule])=>rule.test(purpose));\n const cat=matched?matched[0]:'Unknown';\n const isUnknown=cat==='Unknown';\n out.push({json:{Date:t.day,Time:t.time,Bank:bank,Direction:dir,'Description (redacted)':(bank+' '+dir.toLowerCase()+' • '+(purpose?purpose.slice(0,85)+' • ':'')+(subject||'bank alert')).slice(0,220),Amount_NGN:amount,Type:dir==='Debit'?(isUnknown?'Unclassified Debit':'Expense'):'Unclassified Credit',Category:cat,Source:from?'Gmail':'App notification',Event_ID:key,Status:'Confirmed','Counterparty (redacted)':cp||'',Notes:'Recorded from bank alert; purpose may remain Unknown until identified',Bank_Reference:ref?ref.slice(0,16):'',Account_Hint:accountHint,Counterparty_Bank:cp,Transfer_Group_ID:'',Match_Confidence:'',Review_Reason:isUnknown?'Purpose absent or unclear in bank alert':'Categorised using explicit purpose evidence',Purpose_Text:purpose,is_valid:true}});\n}\nreturn out;\n"
+      }
+    },
+    {
+      "name": "Upsert Spending Ledger",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        720,
+        384
+      ],
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "REPLACE_WITH_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Transactions"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "schema": [
+            {
+              "id": "Date",
+              "displayName": "Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Time",
+              "displayName": "Time",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Bank",
+              "displayName": "Bank",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Direction",
+              "displayName": "Direction",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Description (redacted)",
+              "displayName": "Description (redacted)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Amount_NGN",
+              "displayName": "Amount_NGN",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Type",
+              "displayName": "Type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Category",
+              "displayName": "Category",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Source",
+              "displayName": "Source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Event_ID",
+              "displayName": "Event_ID",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Counterparty (redacted)",
+              "displayName": "Counterparty (redacted)",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Notes",
+              "displayName": "Notes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Bank_Reference",
+              "displayName": "Bank_Reference",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Account_Hint",
+              "displayName": "Account_Hint",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Counterparty_Bank",
+              "displayName": "Counterparty_Bank",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Transfer_Group_ID",
+              "displayName": "Transfer_Group_ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Match_Confidence",
+              "displayName": "Match_Confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Review_Reason",
+              "displayName": "Review_Reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            }
+          ],
+          "matchingColumns": [
+            "Event_ID"
+          ]
+        },
+        "options": {
+          "cellFormat": "RAW",
+          "handlingExtraData": "ignoreIt"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "name": "UBA Gmail Alerts",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        224,
+        416
+      ],
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyX",
+              "value": 10,
+              "unit": "minutes"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "q": "from:ubagroup.com {transaction debit credit alert}",
+          "readStatus": "both"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Wema Gmail Alerts (optional)",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        224,
+        624
+      ],
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyX",
+              "value": 10,
+              "unit": "minutes"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "q": "{from:wemabank.com from:alat.ng from:alatbywema.com} {debit debited credit credited transfer transaction alert}",
+          "readStatus": "both"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "OPay Gmail Alerts",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        208,
+        848
+      ],
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyX",
+              "value": 10,
+              "unit": "minutes"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "q": "{from:opay-nigeria.com from:opay.ng} {transfer transaction debit credit payment received successful}",
+          "readStatus": "both"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Read Existing Ledger",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        656,
+        192
+      ],
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "REPLACE_WITH_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Transactions"
+        },
+        "options": {
+          "dataLocationOnSheet": {
+            "values": {
+              "rangeDefinition": "detectAutomatically"
+            }
+          },
+          "outputFormatting": {
+            "values": {
+              "general": "UNFORMATTED_VALUE",
+              "date": "FORMATTED_STRING"
+            }
+          }
+        }
+      },
+      "executeOnce": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "name": "Match Own Account Transfers",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        928,
+        432
+      ],
+      "parameters": {
+        "jsCode": "\nconst old=$input.all().map(i=>i.json||{}).filter(x=>x.Event_ID);\nconst parsed=$('Apply Description Categories').all().map(i=>i.json||{}).filter(x=>x.is_valid===true&&x.Event_ID);\nconst known=new Set(old.map(x=>String(x.Event_ID))), seen=new Set(),fresh=[];\nfor(const x of parsed){const id=String(x.Event_ID);if(known.has(id)||seen.has(id))continue;seen.add(id);fresh.push({...x});}\nconst all=[...old,...fresh],newIds=new Set(fresh.map(x=>String(x.Event_ID))),result=new Map(fresh.map(x=>[String(x.Event_ID),x])),paired=new Set();\nconst millis=x=>{const d=new Date(String(x.Date||'')+'T'+String(x.Time||'00:00')+':00+01:00');return d.getTime();};\nconst h=s=>{let v=2166136261;for(let i=0;i<s.length;i++){v^=s.charCodeAt(i);v=Math.imul(v,16777619);}return (v>>>0).toString(16).padStart(8,'0');};\nconst validPair=(a,b)=>String(a.Event_ID)!==String(b.Event_ID)&&a.Bank!==b.Bank&&a.Direction!==b.Direction&&['Debit','Credit'].includes(a.Direction)&&['Debit','Credit'].includes(b.Direction)&&!['Duplicate','Ignored'].includes(String(a.Status))&&!['Duplicate','Ignored'].includes(String(b.Status))&&Math.abs(Number(a.Amount_NGN)-Number(b.Amount_NGN))<0.009&&Number.isFinite(millis(a))&&Number.isFinite(millis(b))&&Math.abs(millis(a)-millis(b))<=90*60000;\nconst annotate=(x,msg)=>{x.Review_Reason=msg;x.Notes=String(x.Notes||'').replace(/\\s*\\|\\s*(?:Potential|Possible|Matched|Same amount|Bank and counterpart).*$/i,'')+' | '+msg;};\nfor(const x of fresh){\n if(paired.has(String(x.Event_ID)))continue;\n const cs=all.filter(y=>validPair(x,y)&&!paired.has(String(y.Event_ID)));\n if(cs.length!==1){if(cs.length>1){x.Type='Possible Transfer';x.Match_Confidence='Ambiguous';annotate(x,'Multiple opposite-direction transactions share this amount; review manually');}continue;}\n const y=cs[0],rev=all.filter(z=>validPair(y,z)&&!paired.has(String(z.Event_ID)));\n if(rev.length!==1){x.Type='Possible Transfer';x.Match_Confidence='Ambiguous';annotate(x,'More than one plausible transfer partner; do not auto-match');continue;}\n const debit=x.Direction==='Debit'?x:y,credit=x.Direction==='Credit'?x:y;\n const a=String(debit.Counterparty_Bank||'')===String(credit.Bank||''),b=String(credit.Counterparty_Bank||'')===String(debit.Bank||'');\n const confidence=a&&b?'Strong':a||b?'Likely':'Possible',type=confidence==='Possible'?'Possible Transfer':'Internal Transfer';\n const gid='TRF-'+h([String(x.Event_ID),String(y.Event_ID)].sort().join('|'));\n if(!newIds.has(String(y.Event_ID))&&String(y.Status)==='Confirmed'&&String(y.Type)!=='Internal Transfer'){\n   x.Type='Possible Transfer';x.Transfer_Group_ID=gid;x.Match_Confidence='Manual review required';annotate(x,'Possible match to a previously confirmed transaction; do not overwrite it');continue;\n }\n for(const z of [x,y]){\n  z.Type=type;z.Transfer_Group_ID=gid;z.Match_Confidence=confidence;\n  annotate(z,confidence==='Possible'?'Same amount within 90 minutes across banks; verify both accounts belong to you':'Counterparty bank evidence matches; confirm both accounts belong to you');\n  if(newIds.has(String(z.Event_ID)))result.set(String(z.Event_ID),z);\n  else if(String(z.Status)==='Needs Review')result.set(String(z.Event_ID),{...z});\n  paired.add(String(z.Event_ID));\n }\n}\nreturn [...result.values()].map(x=>({json:x}));\n"
+      }
+    },
+    {
+      "name": "Transaction Parsed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [
+        544,
+        448
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "valid-transaction",
+              "leftValue": "={{ $json.is_valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "name": "Log Parser Exceptions",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        800,
+        640
+      ],
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "REPLACE_WITH_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Parser Exceptions"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "Email_ID"
+          ],
+          "schema": [
+            {
+              "id": "Received_Date",
+              "displayName": "Received_Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Bank",
+              "displayName": "Bank",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Subject",
+              "displayName": "Subject",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Issue",
+              "displayName": "Issue",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Email_ID",
+              "displayName": "Email_ID",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "cellFormat": "RAW",
+          "handlingExtraData": "ignoreIt"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "name": "Read Editable Category Rules",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        650,
+        520
+      ],
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "REPLACE_WITH_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Categories & Rules"
+        },
+        "options": {
+          "dataLocationOnSheet": {
+            "values": {
+              "rangeDefinition": "detectAutomatically"
+            }
+          }
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "name": "Apply Description Categories",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        830,
+        520
+      ],
+      "parameters": {
+        "jsCode": "const parsed=$('Parse Redact and Categorize').all().map(i=>i.json||{});\nconst categoryRows=$input.all().map(i=>i.json||{});\nconst rules=categoryRows.filter(r=>r['Expense category']&&r['Keywords / description']&&r['Expense category']!=='Unknown').flatMap(r=>String(r['Keywords / description']).split('|').map(k=>({category:String(r['Expense category']).trim(),keyword:k.trim()})).filter(x=>x.keyword.length>=3));\nconst escapeRegex=s=>s.replace(/[.*+?^\\x24{}()|[\\]\\\\]/g,'\\\\\\x24&');\nconst isMatch=(purpose,kw)=>new RegExp('(^|[^a-z0-9])'+escapeRegex(kw).replace(/\\\\\\s+/g,'\\\\s+')+'(?=$|[^a-z0-9])','i').test(purpose);\nreturn parsed.map(p=>{\n const x={...p};if(x.is_valid!==true||!x.Event_ID)return {json:x};\n const purpose=String(x.Purpose_Text||'').toLowerCase().trim();\n const hits=purpose?rules.filter(r=>isMatch(purpose,r.keyword)):[];\n const categories=[...new Set(hits.map(h=>h.category))];\n if(categories.length===1){\n   x.Category=categories[0];x.Type=x.Direction==='Debit'?'Expense':'Unclassified Credit';\n   x.Review_Reason='Category matched explicit transfer description';\n   x.Notes=String(x.Notes||'')+' | Classified from description using editable rules';\n } else if(categories.length>1){\n   x.Category='Unknown';x.Type=x.Direction==='Debit'?'Unclassified Debit':'Unclassified Credit';\n   x.Review_Reason='Ambiguous transfer description matched multiple categories';\n } else {\n   x.Category='Unknown';x.Type=x.Direction==='Debit'?'Unclassified Debit':'Unclassified Credit';\n   x.Review_Reason=purpose?'No matching keyword in editable Categories & Rules':'Purpose absent or unclear';\n }\n return {json:x};\n});"
+      }
+    }
+  ],
+  "connections": {
+    "Android Banking Alerts": {
+      "main": [
+        [
+          {
+            "node": "Parse Redact and Categorize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Existing Ledger": {
+      "main": [
+        [
+          {
+            "node": "Match Own Account Transfers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Match Own Account Transfers": {
+      "main": [
+        [
+          {
+            "node": "Upsert Spending Ledger",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transaction Parsed?": {
+      "main": [
+        [
+          {
+            "node": "Read Existing Ledger",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Parser Exceptions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "UBA Gmail Alerts": {
+      "main": [
+        [
+          {
+            "node": "Parse Redact and Categorize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OPay Gmail Alerts": {
+      "main": [
+        [
+          {
+            "node": "Parse Redact and Categorize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wema Gmail Alerts (optional)": {
+      "main": [
+        [
+          {
+            "node": "Parse Redact and Categorize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Redact and Categorize": {
+      "main": [
+        [
+          {
+            "node": "Read Editable Category Rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Editable Category Rules": {
+      "main": [
+        [
+          {
+            "node": "Apply Description Categories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Description Categories": {
+      "main": [
+        [
+          {
+            "node": "Transaction Parsed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "Africa/Lagos",
+    "executionOrder": "v1"
+  }
+}
