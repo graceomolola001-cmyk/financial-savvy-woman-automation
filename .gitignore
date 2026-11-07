@@ -1,0 +1,32 @@
+# Local secrets and environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*credentials*
+*secrets*
+*token*
+private/
+backups/
+exports/
+data/
+bank-statements/
+# Sensitive transactions and raw exports
+*.raw.json
+*.original.json
+*.secret.json
+*.execution.json
+*.csv
+*.xlsx
+*.xls
+*.pdf
+*.eml
+*.mbox
+*.sqlite
+*.sqlite3
+*.db
+__pycache__/
+*.pyc
+.venv/
+venv/
