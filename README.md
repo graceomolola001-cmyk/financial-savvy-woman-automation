@@ -2,6 +2,18 @@
 
 Reusable, privacy-conscious **n8n + Gmail + Google Sheets** personal finance automation.
 
+## Why this project exists
+
+A bank-alert inbox can contain hundreds of entries spread across multiple institutions. Each alert must be interpreted, checked for duplicates and matched to transfers before the figures become useful. This project explores that workflow with reusable n8n templates and a Google Sheets ledger.
+
+**Scenario:** A user receives a UBA debit alert, moves money to OPay, and later receives a Wema notification. A naive tracker counts both sides of an own-account transfer as spending. This workflow applies deterministic parsing, event IDs and cautious transfer matching, retaining unknown items for reconciliation.
+
+**What you can reproduce:** import the two templates, configure OAuth credentials privately, set up the four documented Sheets tabs, submit synthetic alerts, and inspect entries and summaries. Do not assume the templates have production-level accuracy without testing each bank's actual alert formats.
+
+**Portfolio scope:** reusable implementation and demonstration. No verified savings, transaction count, or production uptime is claimed.
+
+See [synthetic test scenarios](docs/TEST_SCENARIOS.md) for a repeatable QA checklist.
+
 ## What it does
 - Parse UBA, OPay and Wema bank-alert messages into credit/debit ledger entries.
 - Categorise **debits** from explicit transfer narrations using editable keyword rules.
