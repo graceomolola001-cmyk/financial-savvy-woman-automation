@@ -1,0 +1,33 @@
+name: Validate public n8n templates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Scan workflow templates for common sensitive patterns
+        run: python scripts/check_public_export.py
+      - name: Validate workflow JSON and node structure
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import json
+          files = sorted(Path('workflows').glob('*.template.json'))
+          assert files, 'No n8n workflow templates found'
+          for path in files:
+              doc = json.loads(path.read_text(encoding='utf-8'))
+              assert isinstance(doc.get('nodes'), list), f'{path}: nodes missing'
+              assert isinstance(doc.get('connections'), dict), f'{path}: connections missing'
+              print(f'{path}: {len(doc["nodes"])} nodes validated')
+          PY
